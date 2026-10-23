@@ -73,6 +73,8 @@ internal static class Program
         };
         _mqtt.ConnectionChanged += up => Log(up ? "已连接 GCUBridge" : "与 GCUBridge 断开，重连中…");
         _mqtt.Start();
+        ProcessSampler.Start();
+        Log("  应用占用采样：CPU/GPU Top5，每 2 秒");
 
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; _stop = true; };
 
@@ -146,6 +148,18 @@ internal static class Program
         Add(sb, "bat", Data.BatteryPercent);
         Add(sb, "fe", Data.FanError);
         Add(sb, "age", age);
+
+        // 应用占用 Top5：ac=行数，a1=应用名，c1=CPU%，g1=GPU%
+        // ac 必须在 a/c/g 之前发，固件收到后会先清掉旧行
+        var top = ProcessSampler.Top;
+        Add(sb, "ac", (long)top.Count);
+        for (int i = 0; i < top.Count && i < 5; i++)
+        {
+            var a = top[i];
+            Add(sb, $"a{i + 1}", a.Name.Length > 10 ? a.Name[..10] : a.Name);
+            Add(sb, $"c{i + 1}", (double?)a.Cpu);
+            Add(sb, $"g{i + 1}", (double?)a.Gpu);
+        }
         return sb.ToString();
     }
 

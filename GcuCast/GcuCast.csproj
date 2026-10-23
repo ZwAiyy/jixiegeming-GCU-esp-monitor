@@ -11,6 +11,11 @@
     <DebugType>none</DebugType>
   </PropertyGroup>
 
+  <!-- GPU 按进程占用要用 Windows "GPU Engine" 性能计数器 -->
+  <ItemGroup>
+    <PackageReference Include="System.Diagnostics.PerformanceCounter" Version="8.0.1" />
+  </ItemGroup>
+
   <!-- MQTT / 遥测解析实现，位于 Shared/ 目录 -->
   <ItemGroup>
     <Compile Include="Shared/GcuMqtt.cs" Link="Shared/GcuMqtt.cs" />
