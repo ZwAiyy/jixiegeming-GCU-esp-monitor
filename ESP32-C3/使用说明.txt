@@ -1,0 +1,174 @@
+GCU 无线监控屏（ESP32 + OLED）
+================================
+
+用一块 ESP32 和 0.96 寸 OLED，把电脑的 CPU / GPU / 内存 / 风扇 / SSD 数据
+无线显示出来。数据来源还是 GCU 本身，只是多了一条无线出口。
+
+
+一、它是怎么连起来的
+--------------------
+  GCU 主程序
+      │  MQTT（只监听 127.0.0.1:13688，外部连不进来）
+      ▼
+  电脑端转发器 GcuCast.exe     ← 在电脑上跑
+      │  UDP 广播，每秒一包，约 105 字节
+      ▼
+  ESP32 + OLED                 ← 插电即用，不用连电脑的线
+
+为什么要这个转发器：GCUBridge 只接受来自本机的连接，任何局域网设备
+直接去连都会被拒绝（返回码 2）。所以必须由电脑代收，再用 UDP 广播出去。
+好处是 ESP32 端不用跑 MQTT，也不用解析 JSON，省内存、代码短、断线不卡。
+
+
+二、准备材料
+------------
+  · ESP32-C3 SuperMini 开发板 1 块
+  · 0.96 寸 128x64 I2C OLED（SSD1306，4 针：VCC/GND/SDA/SCL）
+  · 杜邦线 4 根
+  · USB-C 数据线（注意是数据线，不是只能充电的）
+
+  OLED 地址一般是 0x3C，少数是 0x3D。
+
+
+三、接线
+--------
+      OLED          ESP32-C3 SuperMini
+      ────          ──────────────────
+      VCC    ────→  3V3
+      GND    ────→  GND
+      SDA    ────→  GPIO5
+      SCL    ────→  GPIO6
+
+  为什么不用 GPIO8/9：这两根在 C3 SuperMini 上是板载 LED 和 BOOT 键，
+  拿来当 I2C 会互相干扰。GPIO5/6 干净，随便用。
+
+  供电注意：OLED 一定接 3V3，不要接 5V（多数模块耐不住，也会把 I2C 电平抬高）。
+
+
+四、烧录固件
+------------
+  1. Arduino IDE 打开：ESP32-OLED/GCU_OLED/GCU_OLED.ino
+
+  2. 改文件开头这几行：
+         WIFI_SSID   你的 WiFi 名称
+         WIFI_PASS   你的 WiFi 密码
+         PIN_SDA / PIN_SCL   如果你接线不是 5/6，改成实际的
+
+  3. 开发板选：ESP32C3 Dev Module
+     其它设置保持默认，但确认这两项：
+         Flash Size        : 4MB
+         USB CDC On Boot   : Enabled      ← 不选这个，串口监视器看不到输出
+
+  4. 选对端口，点上传。
+     如果提示找不到端口：按住板上 BOOT 键不放，插 USB，再松开，然后上传。
+
+  5. 上传完按一下 RESET，屏幕先显示 "WiFi connecting..."，
+     连上后显示本机 IP，1~2 秒后进入主界面。
+
+  已装库（你机器上都有，不用再装）：
+      Adafruit SSD1306 / Adafruit GFX Library / Adafruit BusIO
+
+
+五、电脑端启动
+--------------
+  双击   ESP32-OLED\电脑端转发器\GcuCast.exe
+  会弹出一个黑窗口，显示连接状态和每 15 秒一次的心跳。
+
+  不想看窗口就用   静默启动.vbs   （后台运行，无窗口）
+  想开机自启：Win+R 输入 shell:startup 回车，把 静默启动.vbs 的快捷方式丢进去。
+
+  前提：GCU 主程序要在运行（GCUBridge 是它的服务）。GCU 没开的话，
+  转发器会一直显示"与 GCUBridge 断开，重连中"。
+
+  日志写在同目录的 cast.log，出问题先看它。
+
+
+六、屏幕布局
+------------
+      GCU MONITOR          ■LIVE
+      ────────────────────────────
+      CPU ████░░░░░░  19%   62C
+      GPU ██░░░░░░░░  10%   52C
+      MEM ██████░░░░  54%  8.5G
+      FAN 2722/2650
+      SSD 47C      373K/138K
+
+  · 右上角 ■LIVE = 正在收数据；□LATE = 超过 3 秒没收到；NO SIG = 从来没收到
+  · 左侧条是占用率（0~100%）
+  · FAN 是 CPU 风扇 / GPU 风扇转速
+  · 最后一行的两个数字是 下载 / 上传速率
+  · 风扇报错时 FAN 行右侧出现 ERR
+
+
+七、收不到数据怎么查
+--------------------
+  按顺序排查，基本能定位：
+
+  1. 黑窗口里有没有"已连接 GCUBridge"
+     没有 → GCU 主程序没开，或者被别的程序占用了 OcScanner 这个身份。
+            改 config.json 里的 ClientId 为 "OcTool" 试试。
+
+  2. 黑窗口有没有"本机地址 192.168.x.x"这类输出
+     记下这个 IP，后面可能要用。
+
+  3. 屏幕显示 "waiting for" + 一个 IP
+     说明 ESP32 连上 WiFi 了，只是没收到包 → 看第 4 步。
+     屏幕是黑的或一直 "WiFi connecting..." → WiFi 名称/密码错了。
+
+  4. 最常见的原因：WiFi 隔离（AP Isolation）
+     校园网、公司网、部分路由器的访客网络会禁止设备之间互相通信，
+     广播包直接丢掉。判断方法：手机和电脑互相 ping 不通，就是被隔离了。
+
+     解决办法（任选）：
+       a) 用手机开热点，电脑和 ESP32 都连这个热点
+       b) 用电脑自己开热点（设置 → 网络和 Internet → 移动热点）
+       c) 家用路由器关掉"AP 隔离"/"客户端隔离"
+
+  5. 如果广播不通但能 ping 通，改成单播：
+     打开 config.json，把电脑的 IP 填进 Targets，并把 UseBroadcast 改成 false：
+         "UseBroadcast": false,
+         "Targets": ["192.168.1.100"]
+     存盘后重启转发器。
+
+  6. 还不行就看串口（Arduino IDE → 串口监视器，115200）：
+     正常应该看到 [wifi] ok ... 和 [udp] listening on 8266
+     如果显示 [oled] init failed，那是屏幕接线或地址（0x3C/0x3D）的问题。
+
+
+八、配置文件说明（电脑端转发器/config.json）
+-------------------------------------------
+  MqttHost / MqttPort   GCUBridge 地址，默认 127.0.0.1:13688，别改
+  ClientId              MQTT 身份，默认 OcScanner；被占用时可换 OcTool
+  UdpPort               发送端口，默认 8266，要和固件里的 UDP_PORT 一致
+  UseBroadcast          true = 向整个网段广播
+  BroadcastAddress      广播地址，默认 255.255.255.255
+                        收不到时试本网段广播，例如 192.168.1.255
+  Targets               单播目标列表，填了就不发广播（UseBroadcast 为 false 时生效）
+  IntervalMs            发送周期，默认 1000 毫秒
+  Verbose               true 时把每条原始报文打进日志，排障用，平时关掉
+
+
+九、关于 GPU 数据
+----------------
+  GCU 在独显空闲时可能完全不推送 GpuInfo（实测空闲 14 秒一条都没有）。
+  这种情况下屏幕会保持最后一次的 GPU 数值不动，不是程序卡了。
+  跑个游戏或者开个 GPU 负载，数值就会跟着变。
+
+  另外你的机器上有个 GameViewer 虚拟显示器，它和独显一起出现在硬件信息里，
+  不影响数据读取。
+
+
+十、数据格式（想自己改固件的话）
+------------------------------
+  UDP 报文是一行 UTF-8 文本，'|' 分隔的 key=value：
+
+    GCU1|cpu=19|ct=62|gpu=10|gt=52|mem=54|mt=15.7|mu=8.5|
+        f1=2722|f2=2650|ssd=47|dn=373 Kbps|up=138 Kbps|bat=100|fe=0|age=0
+
+    cpu/CPU使用率%     ct/CPU温度℃     gpu/GPU使用率%     gt/GPU温度℃
+    mem/内存%          mt/总内存GB   mu/已用GB
+    f1/CPU风扇RPM      f2/GPU风扇RPM
+    ssd/SSD温度℃       dn/下载速率    up/上传速率
+    bat/电池%          fe/风扇错误码  age/数据年龄（秒，-1 表示还没数据）
+
+  某个字段没数据时转发器就不发这个 key，固件会保留上一次的值。

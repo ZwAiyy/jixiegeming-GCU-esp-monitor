@@ -1,0 +1,166 @@
+GCU OLED HUD —— ESP8266 串口下载说明
+=====================================
+
+目录结构
+--------
+  GCU_OLED_8266\            固件源码（Arduino 工程）
+  固件\GCU_OLED_8266_4MB.bin    4MB 闪存的板子用（NodeMCU / Wemos / ESP-12F 常见）
+  固件\GCU_OLED_8266_1MB.bin    1MB 闪存的板子用（ESP-01 / ESP-01S）
+  烧录.bat                       一键烧录（免开 Arduino IDE）
+
+电脑端转发器不用另做一份，直接用 ..\ESP32-OLED\电脑端转发器\GcuCast.exe，
+它的用法见 ..\ESP32-OLED\使用说明.txt。8266 和 C3 的报文协议完全一样。
+
+
+第一步：先确认你手里是哪种板子
+------------------------------
+两种情况，接线和下载方式完全不同：
+
+  A. 板子自带 USB 口（NodeMCU、Wemos D1 mini、ESP-12E 开发板、ESP8266 开发板）
+     → 一根 USB 线直接烧，不用接别的线。看「路线 A」。
+
+  B. 只有一个 2x4 排针的裸模块（ESP-12F / ESP-12S / ESP-01 / ESP-01S）
+     → 必须配一个 USB-TTL 串口模块（CH340 / CP2102 都行）。看「路线 B」。
+
+不确定的话看板子：有 USB 座就是 A，只有排针就是 B。
+
+
+路线 A：自带 USB 口的开发板
+---------------------------
+1) 插上 USB，打开「设备管理器 → 端口(COM 和 LPT)」
+   应该出现：
+     USB-SERIAL CH340 (COM5)        ← CH340 芯片
+     Silicon Labs CP210x (COM5)     ← CP2102 芯片
+   如果出现的是带黄色感叹号的未知设备，先装驱动：
+     CH340   → 搜 "CH341SER.EXE"（沁恒官网）
+     CP210x  → 搜 "CP210x Universal Windows Driver"（Silicon Labs 官网）
+   装完重新插拔一次。这一步不过，后面全白搭。
+
+2) 用 Arduino IDE 打开 GCU_OLED_8266\GCU_OLED_8266.ino
+   工具 → 开发板 → ESP8266 Boards → NodeMCU 1.0 (ESP-12E Module)
+   工具 → Upload Speed → 921600（不稳就降到 115200）
+   工具 → Flash Size → 4MB (FS:none)
+   工具 → 端口 → 选刚才那个 COM 口
+
+3) 改代码开头两行，填 WiFi 名和密码（**只支持 2.4G，5G 连不上**）
+   static const char *WIFI_SSID = "你的WiFi名称";
+   static const char *WIFI_PASS = "你的WiFi密码";
+
+4) 点左上角「→」上传。开发板会自动复位进下载模式，不用手动按键。
+   看到 "Connecting...." 后开始写入，约 10 秒。
+
+   如果卡在 Connecting........_____ 一直失败：
+     · 按住板上的 FLASH 键 → 点上传 → 出现 Connecting 后松开
+     · 或把 Upload Speed 降到 115200
+     · 或换一根 USB 线（很多是「只能充电」的废线，没有数据线芯）
+
+5) 上传完成后自动重启运行。串口监视器波特率 115200 能看到：
+     [boot] GCU OLED HUD (ESP8266)
+     [wifi] ok 192.168.x.x
+     [udp] listening on 8266, free heap xxxxx
+
+
+路线 B：裸模块 + USB-TTL
+------------------------
+先看清楚：ESP8266 是 3.3V 器件，**任何引脚都不能接 5V**，接错立刻烧。
+
+接线（ESP-12F / ESP-12S，逐根对照）：
+
+  USB-TTL          ESP8266 模块
+  -------          ------------
+  3V3      ──────  3V3 (VCC)
+  GND      ──────  GND
+  TXD      ──────  RXD (GPIO3)
+  RXD      ──────  TXD (GPIO1)
+  3V3      ──10k── EN / CH_PD      必须拉高，否则芯片不启动
+  3V3      ──10k── GPIO2           建议拉高
+  GND      ──10k── GPIO15          必须拉低
+  3V3      ──10k── RST              再加一个按钮到 GND 当复位键
+  GND      ──按钮─ GPIO0            下载时接地，运行时断开
+
+进入下载模式（每次烧录都要做这一步，顺序别错）：
+  ① GPIO0 接 GND
+  ② 按一下 RST（或断电再上电）
+  ③ 松开 RST，此时模块已在下载模式
+  ④ 开始烧录
+  ⑤ 烧完断开 GPIO0（悬空或接 3V3）
+  ⑥ 再按一次 RST，程序才开始跑
+
+**最容易踩的两个坑：**
+
+  坑 1：电源电流不够。
+    ESP8266 发射瞬间要 300~400mA。大多数 USB-TTL 模块的 3V3 针只有
+    100~200mA，结果就是「能连上、烧到一半断开」或「不停重启、串口刷乱码」。
+    解决：用独立的 3.3V LDO 供电（AMS1117-3.3 + 电容），或者用一块
+    带 3V3 输出的开发板给模块供电。这种情况十有八九是电源，不是代码。
+
+  坑 2：TX/RX 没交叉。
+    是 TTL 的 TX 接模块的 RX，不是 TX 接 TX。
+
+ESP-01 / ESP-01S 特别说明：
+    只有 8 个脚，能用的 IO 只有 GPIO0 和 GPIO2。
+    接线：3V3→3V3、GND→GND、TXD→RXD、RXD→TXD、CH_PD→3V3（必须）、GPIO0→GND 下载
+    烧录用 1MB 那份 bin，开发板选 Generic ESP8266 Module + Flash Size 1MB。
+    OLED 只能接在 GPIO0(SDA) / GPIO2(SCL)，代码开头改成：
+      static const int PIN_SDA = 0;
+      static const int PIN_SCL = 2;
+    这两个脚上电时有电平要求，接 OLED 后偶尔会进不了下载模式 —— 烧录时把
+    OLED 拔掉，烧完再插回去最稳。
+
+
+不开 Arduino IDE，直接用命令烧
+------------------------------
+本机已经装好 esptool 5.6.0，在命令行里执行（把 COM5 换成你的口）：
+
+  # 1) 先看有哪些串口
+  python -c "import serial.tools.list_ports as l;[print(p.device,p.description) for p in l.comports()]"
+
+  # 2) 烧录（4MB 板子）
+  python -m esptool --port COM5 --baud 460800 write-flash 0x0 "固件\GCU_OLED_8266_4MB.bin"
+
+  # 2') 1MB 板子（ESP-01）
+  python -m esptool --port COM5 --baud 460800 write-flash 0x0 "固件\GCU_OLED_8266_1MB.bin"
+
+  # 烧不进去先整片擦除再试
+  python -m esptool --port COM5 erase-flash
+
+注意 esptool 5.x 的命令名是 write-flash / erase-flash（带横杠），
+网上老教程写的 write_flash 是 4.x 以前的写法，会报错。
+
+或者直接双击「烧录.bat」，按提示输入 COM 口即可。
+
+
+烧完接线（OLED → NodeMCU）
+---------------------------
+  OLED VCC → 3V3
+  OLED GND → GND
+  OLED SDA → D2  (GPIO4)
+  OLED SCL → D1  (GPIO5)
+
+裸模块就按你自己定义的 PIN_SDA / PIN_SCL 接。
+
+上电后板载 LED 的含义（不用开串口也能判断状态）：
+  常灭         收到数据了，一切正常
+  1 秒慢闪      WiFi 连上了，但没收到电脑的 UDP（看 GcuCast 有没有开）
+  0.2 秒快闪    WiFi 没连上（SSID/密码错，或者连的是 5G 网络）
+
+
+排障对照表
+----------
+  现象                        原因 / 处理
+  --------------------------  --------------------------------------------
+  设备管理器没有 COM 口        驱动没装，或 USB 线是充电线
+  Connecting........_____      手动进下载模式（GPIO0 接地 + 复位），或降速
+  烧到一半报错断开             电源电流不够（裸模块最常见）
+  烧完串口刷乱码               波特率不对，改 115200；或供电不稳
+  屏幕全黑、串口提示 init failed  I2C 接线错 / 模块地址是 0x3D / 供电不足
+  屏幕亮但一直 waiting        GcuCast 没开，或电脑和板子不在同一网段
+  一直快闪                     WiFi 连不上：确认是 2.4G，密码别带特殊字符
+  数据跳但不动                GcuCast 停了；或者 WiFi 信号太弱丢包
+
+
+和 ESP32-C3 版的关系
+--------------------
+协议完全一致，电脑端 GcuCast 不用改任何设置。以后 C3 到货了，
+直接烧 ESP32-OLED\GCU_OLED\ 那份，接线改成 SDA→GPIO5、SCL→GPIO6 即可。
+两个版本可以同时在线，屏幕上显示同一份数据。

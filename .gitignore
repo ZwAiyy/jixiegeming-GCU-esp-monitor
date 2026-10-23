@@ -1,0 +1,18 @@
+# 构建产物
+bin/
+obj/
+publish/
+固件/
+
+# 日志
+*.log
+
+# 本机配置（含 IP / 凭据，个人配置不入库，仓库只提供 config.example.json）
+config.json
+
+# IDE / 系统
+.vs/
+.idea/
+*.user
+Thumbs.db
+.DS_Store
