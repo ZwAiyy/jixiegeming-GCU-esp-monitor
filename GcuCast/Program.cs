@@ -46,12 +46,18 @@ internal static class Program
         _udp = new UdpClient { EnableBroadcast = true };
 
         var targets = _cfg.ResolveTargets();
-        if (targets.Count == 0)
+        if (targets.Count == 0 && string.IsNullOrWhiteSpace(_cfg.SignalingUrl))
         {
             Log("  错误：没有可用的发送目标，请检查 config.json");
             return 1;
         }
-        Log($"  发送到 : {string.Join(", ", targets.Select(t => t.ToString()))}");
+        if (targets.Count > 0)
+            Log($"  发送到 : {string.Join(", ", targets.Select(t => t.ToString()))}");
+        if (!string.IsNullOrWhiteSpace(_cfg.SignalingUrl))
+        {
+            Signaling.Start(_cfg.SignalingUrl, _cfg.SignalingToken);
+            Log($"  信令  : {_cfg.SignalingUrl}（板子 IP 自动获取，动态追加）");
+        }
         Log("");
 
         _mqtt = new GcuMqtt(_cfg.ClientId, _cfg.ClientId + "User", PasswordFor(_cfg.ClientId))
@@ -82,6 +88,8 @@ internal static class Program
         long sent = 0;
         DateTime lastBeat = DateTime.UtcNow;
 
+        string? lastSeenBoard = null;
+
         while (!_stop)
         {
             Thread.Sleep(Math.Clamp(_cfg.IntervalMs, 200, 10000));
@@ -89,8 +97,22 @@ internal static class Program
             string line = BuildPayload();
             byte[] bytes = Encoding.UTF8.GetBytes(line);
 
+            // 静态目标 + 信令发现的板子 IP（动态）
+            var eps = _cfg.ResolveTargets();
+            var board = Signaling.BoardIp;
+            if (board != lastSeenBoard)
+            {
+                lastSeenBoard = board;
+                if (board != null) Log($"  [信令] 目标更新: {board}:{_cfg.UdpPort}");
+            }
+            if (board != null && System.Net.IPAddress.TryParse(board, out var baddr))
+            {
+                var bep = new IPEndPoint(baddr, _cfg.UdpPort);
+                if (!eps.Contains(bep)) eps.Add(bep);
+            }
+
             int ok = 0;
-            foreach (var ep in targets)
+            foreach (var ep in eps)
             {
                 try { _udp.Send(bytes, bytes.Length, ep); ok++; }
                 catch (Exception ex) { if (tick % 30 == 0) Log($"发送到 {ep} 失败: {ex.Message}"); }

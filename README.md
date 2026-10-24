@@ -20,6 +20,9 @@
 GcuCast/            电脑端转发器源码（.NET 10 控制台程序）
   Shared/           MQTT 客户端与遥测解析（纯手写 MQTT 3.1.1，无第三方依赖）
   config.example.json   配置模板
+signaling/          可选：IP 心跳信令服务（部署在内网任意 Linux 上，
+                    解决电脑和板子 IP 都是 DHCP 动态分配、广播又被
+                    路由器挡住时互相找不到的问题。零依赖，Python 3 标准库）
 ESP32-C3/
   GCU_OLED/         ESP32-C3 SuperMini 固件（Arduino）
   使用说明.txt       接线 / 烧录 / 排障（写得比较全，推荐先看）
@@ -78,11 +81,30 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
   "UseBroadcast": true,            // 广播：板子不用知道电脑 IP
   "BroadcastAddress": "255.255.255.255,192.168.1.255",  // 逗号分隔可多个，第二个填自己网段的定向广播
   "Targets": [],                   // 广播不通时改单播，填板子 IP
-  "IntervalMs": 1000
+  "IntervalMs": 1000,
+  "SignalingUrl": "",              // 心跳信令服务地址（可选），如 http://172.16.0.100:8300/ip
+  "SignalingToken": "gcu-hud-2026" // 信令口令，与服务器端一致
 }
 ```
 
 广播和单播是**同时发**的：广播通了的话，板子换 IP 也不用改任何配置。
+
+### IP 心跳信令（可选，推荐内网有 Linux 服务器时启用）
+
+校园网/公司网常见困境：电脑和板子的 IP 都是 DHCP 动态分配，广播又被三层路由挡住——
+两边互相找不到，换 IP 就得手动改配置。解决方案是找台内网 Linux（树莓派、NAS、实验室服务器都行）
+跑 `signaling/heartbeat_server.py`（零依赖）当"留言板"：
+
+```
+8266 ──每30秒 POST 心跳（服务器记录来源 IP）──→ Linux 服务器 ←──每5秒 GET 板子IP── GcuCast
+```
+
+1. 服务器上：`python3 heartbeat_server.py`（或用 systemd 常驻，见 signaling/ 目录）
+2. 固件里 `SIGNAL_URL` 填 `http://服务器IP:8300/heartbeat`
+3. GcuCast 的 config.json 加 `"SignalingUrl": "http://服务器IP:8300/ip"`
+4. 以后板子换 IP，GcuCast 自动跟上，日志会打 `[信令] 目标更新: x.x.x.x`
+
+监控数据仍然走局域网 UDP 直连，服务器只传 IP，挂了也不影响原链路（回退手动改配置）。
 
 ### 3. 开机自启（可选）
 

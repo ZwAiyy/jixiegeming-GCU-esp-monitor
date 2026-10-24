@@ -40,6 +40,14 @@ static const char *PORTAL_URL = "";   // 例如 "http://172.16.0.1/api/account/l
 static const char *PORTAL_BODY = "";  // 例如 "username=学号&password=密码&nasId=2&isp=local&timeLimit="
 static const unsigned long PORTAL_REAUTH_MS = 10UL * 60 * 1000;  // 10 分钟续一次
 
+// ---------------- IP 心跳信令（可选） ----------------
+// 内网 Linux 服务器跑 signaling/heartbeat_server.py 后，把地址填到这里；
+// 板子每 30 秒上报一次，电脑端 GcuCast 自动取到板子 IP，换 IP 免改配置。
+// 留空 "" 关闭该功能。口令要与服务器端 TOKEN 一致。
+static const char *SIGNAL_URL = "";   // 例如 "http://172.16.0.100:8300/heartbeat"
+static const char *SIGNAL_TOKEN = "gcu-hud-2026";
+static const unsigned long SIGNAL_PERIOD_MS = 30UL * 1000;
+
 static const int PIN_SDA = 4;      // NodeMCU 的 D2。裸模块按你的接法改
 static const int PIN_SCL = 5;      // NodeMCU 的 D1。ESP-01 改成 0 和 2
 static const uint8_t OLED_ADDR = 0x3C;   // 少数模块是 0x3D
@@ -90,6 +98,7 @@ unsigned long lastDrawMs = 0;
 unsigned long lastWifiTryMs = 0;
 unsigned long lastLedMs = 0;
 unsigned long lastPortalMs = 0;
+unsigned long lastSignalMs = 0;
 bool ledOn = false;
 bool wasWifiOk = false;
 uint8_t curPage = 0;   // 0 = 主页面，1 = DETAIL 详情页
@@ -127,6 +136,21 @@ void portalKeepAlive() {
     lastPortalMs = millis();
   }
   wasWifiOk = true;
+}
+
+// ---------------- IP 心跳信令上报 ----------------
+void signalKeepAlive() {
+  if (SIGNAL_URL[0] == '\0' || WiFi.status() != WL_CONNECTED) return;
+  unsigned long now = millis();
+  if (now - lastSignalMs < SIGNAL_PERIOD_MS) return;
+  lastSignalMs = now;
+  WiFiClient wc;
+  HTTPClient http;
+  String url = String(SIGNAL_URL) + "?token=" + SIGNAL_TOKEN;
+  if (!http.begin(wc, url)) return;
+  int code = http.POST("");          // 服务器记录来源 IP，报文内容无所谓
+  http.end();
+  Serial.printf("[signal] HTTP %d\n", code);
 }
 
 void resetMetrics() {
@@ -586,6 +610,7 @@ void setup() {
 void loop() {
   ensureWifi();
   portalKeepAlive();
+  signalKeepAlive();
 
   int sz = udp.parsePacket();
   if (sz > 0) {

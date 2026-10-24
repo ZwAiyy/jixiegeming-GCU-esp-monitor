@@ -23,10 +23,10 @@ internal sealed class CastConfig
     /// <summary>
     /// 广播地址，逗号分隔可填多个（会全部同时发送）：
     ///   255.255.255.255        受限广播，一般不出本路由器
-    ///   192.168.1.255         定向广播（按本机网段算 /16），能不能穿过校园网路由器看运气
+    ///   172.26.255.255         定向广播（按本机网段算 /16），能不能穿过校园网路由器看运气
     /// 广播和 Targets 单播是同时发的：广播通了板子换 IP 也不用改配置。
     /// </summary>
-    public string BroadcastAddress { get; set; } = "255.255.255.255,192.168.1.255";
+    public string BroadcastAddress { get; set; } = "255.255.255.255,172.26.255.255";
 
     /// <summary>额外的单播目标（"192.168.1.50" 或 "192.168.1.50:8266"），广播不通时用这个。</summary>
     public string[] Targets { get; set; } = Array.Empty<string>();
@@ -36,6 +36,16 @@ internal sealed class CastConfig
 
     /// <summary>为 true 时把收到的每条原始报文打到日志（排障用，平时关掉）。</summary>
     public bool Verbose { get; set; } = false;
+
+    /// <summary>
+    /// IP 心跳信令服务 URL（内网 Linux 上跑 heartbeat_server.py），如 "http://172.16.50.83:8300/ip"。
+    /// 板子每 30 秒向同一服务器 POST 心跳，这里轮询拿到板子的最新 IP，
+    /// 动态追加为单播目标——换 IP 不用再改配置。留空 = 不启用。
+    /// </summary>
+    public string SignalingUrl { get; set; } = "";
+
+    /// <summary>信令口令，与服务器端 heartbeat_server.py 里的 TOKEN 一致。</summary>
+    public string SignalingToken { get; set; } = "gcu-hud-2026";
 
     static readonly JsonSerializerOptions JsonOpts = new()
     {
