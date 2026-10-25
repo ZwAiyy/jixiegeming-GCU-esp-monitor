@@ -106,7 +106,7 @@ struct Metrics {
   bool hasApp;                    // 收到过应用数据
   char appName[5][11];            // 应用名，最多 10 字符
   float appCpu[5];
-  float appGpu[5];
+  float appMem[5];
 } m;
 
 unsigned long lastPacketMs = 0;
@@ -201,7 +201,7 @@ void resetMetrics() {
   m.appN = 0;
   m.hasApp = false;
   memset(m.appName, 0, sizeof(m.appName));
-  for (int i = 0; i < 5; i++) { m.appCpu[i] = NAN; m.appGpu[i] = NAN; }
+  for (int i = 0; i < 5; i++) { m.appCpu[i] = NAN; m.appMem[i] = NAN; }
 }
 
 static float toF(const char *s) {
@@ -259,7 +259,7 @@ void parsePacket(char *buf) {
       // 应用占用 Top5：ac=行数（先于 a/c/g 发，用于清旧行）
       else if (!strcmp(k, "ac")) {
         int n = (int)constrain(toF(v), 0.0f, 5.0f);
-        for (int i = n; i < 5; i++) { m.appName[i][0] = 0; m.appCpu[i] = m.appGpu[i] = NAN; }
+        for (int i = n; i < 5; i++) { m.appName[i][0] = 0; m.appCpu[i] = m.appMem[i] = NAN; }
         m.appN = n;
         m.hasApp = n > 0;
       }
@@ -267,7 +267,7 @@ void parsePacket(char *buf) {
         int i = k[1]-'1'; strncpy(m.appName[i], v, 10); m.appName[i][10] = 0;
       }
       else if (k[0]=='c' && k[1]>='1' && k[1]<='5' && k[2]==0) m.appCpu[k[1]-'1'] = toF(v);
-      else if (k[0]=='g' && k[1]>='1' && k[1]<='5' && k[2]==0) m.appGpu[k[1]-'1'] = toF(v);
+      else if (k[0]=='g' && k[1]>='1' && k[1]<='5' && k[2]==0) m.appMem[k[1]-'1'] = toF(v);
     }
     tok = strtok(NULL, "|");
   }
@@ -418,7 +418,7 @@ void drawTop() {
   display.setTextColor(SSD1306_WHITE);
 
   display.setCursor(0, 0);
-  display.print("TOP APPS");
+  display.print("TOP PROC");
   if (live) {
     display.fillRect(94, 1, 5, 5, SSD1306_WHITE);
     display.setCursor(102, 0);
@@ -433,11 +433,11 @@ void drawTop() {
   }
   display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
 
-  // 列头
+  // 列头（任务管理器"进程"页同口径：CPU% + 内存MB）
   display.setCursor(66, 12);
   display.print("CPU");
-  display.setCursor(100, 12);
-  display.print("GPU");
+  display.setCursor(96, 12);
+  display.print("MEM");
 
   if (!m.hasApp) {
     display.setCursor(0, 32);
@@ -454,7 +454,7 @@ void drawTop() {
     display.setCursor(0, y);
     display.print(m.appName[i]);
     numRight(90, y, m.appCpu[i], "%");
-    numRight(127, y, m.appGpu[i], "%");
+    numRight(127, y, m.appMem[i], "M");
   }
   display.display();
 }
