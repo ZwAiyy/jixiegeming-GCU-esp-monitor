@@ -101,12 +101,6 @@ struct Metrics {
   char up[16];
   float dnK, upK;                 // 网速数值（Kbps），NET 页画曲线用
   bool valid;
-  // 应用占用 Top5（页面 2）
-  int appN;                       // 有效行数 0..5
-  bool hasApp;                    // 收到过应用数据
-  char appName[5][11];            // 应用名，最多 10 字符
-  float appCpu[5];
-  float appMem[5];
 } m;
 
 unsigned long lastPacketMs = 0;
@@ -118,7 +112,7 @@ unsigned long lastSignalMs = 0;
 bool ledOn = false;
 bool wasWifiOk = false;
 bool screenOn = true;
-uint8_t curPage = 0;   // 0 主页 / 1 详情 / 2 Top5 / 3 NET 曲线
+uint8_t curPage = 0;   // 0 主页 / 1 详情 / 2 NET 曲线
 
 // ---------------- 下行速率历史（NET 页曲线） ----------------
 // 每 4 秒采一个点，64 个点 = 最近 4 分 16 秒；量程自动缩放到本次峰值
@@ -198,10 +192,6 @@ void resetMetrics() {
   strcpy(m.up, "--");
   m.dnK = m.upK = NAN;
   m.valid = false;
-  m.appN = 0;
-  m.hasApp = false;
-  memset(m.appName, 0, sizeof(m.appName));
-  for (int i = 0; i < 5; i++) { m.appCpu[i] = NAN; m.appMem[i] = NAN; }
 }
 
 static float toF(const char *s) {
@@ -256,18 +246,6 @@ void parsePacket(char *buf) {
       else if (!strcmp(k, "fe"))  m.fe  = toF(v);
       else if (!strcmp(k, "dn"))  { strncpy(m.dn, v, sizeof(m.dn) - 1); m.dn[sizeof(m.dn) - 1] = 0; m.dnK = parseRateK(v); }
       else if (!strcmp(k, "up"))  { strncpy(m.up, v, sizeof(m.up) - 1); m.up[sizeof(m.up) - 1] = 0; m.upK = parseRateK(v); }
-      // 应用占用 Top5：ac=行数（先于 a/c/g 发，用于清旧行）
-      else if (!strcmp(k, "ac")) {
-        int n = (int)constrain(toF(v), 0.0f, 5.0f);
-        for (int i = n; i < 5; i++) { m.appName[i][0] = 0; m.appCpu[i] = m.appMem[i] = NAN; }
-        m.appN = n;
-        m.hasApp = n > 0;
-      }
-      else if (k[0]=='a' && k[1]>='1' && k[1]<='5' && k[2]==0) {
-        int i = k[1]-'1'; strncpy(m.appName[i], v, 10); m.appName[i][10] = 0;
-      }
-      else if (k[0]=='c' && k[1]>='1' && k[1]<='5' && k[2]==0) m.appCpu[k[1]-'1'] = toF(v);
-      else if (k[0]=='g' && k[1]>='1' && k[1]<='5' && k[2]==0) m.appMem[k[1]-'1'] = toF(v);
     }
     tok = strtok(NULL, "|");
   }
@@ -408,58 +386,7 @@ void drawMain() {
   display.display();
 }
 
-// ---------------- 页面 2：应用占用 Top5 ----------------
-void drawTop() {
-  if (!oledOk) return;
-  bool live = m.valid && (millis() - lastPacketMs < 3000);
-
-  display.clearDisplay();
-  display.setTextSize(1);
-  display.setTextColor(SSD1306_WHITE);
-
-  display.setCursor(0, 0);
-  display.print("TOP PROC");
-  if (live) {
-    display.fillRect(94, 1, 5, 5, SSD1306_WHITE);
-    display.setCursor(102, 0);
-    display.print("LIVE");
-  } else if (m.valid) {
-    display.drawRect(94, 1, 5, 5, SSD1306_WHITE);
-    display.setCursor(102, 0);
-    display.print("LATE");
-  } else {
-    display.setCursor(90, 0);
-    display.print("NO SIG");
-  }
-  display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
-
-  // 列头（任务管理器"进程"页同口径：CPU% + 内存MB）
-  display.setCursor(66, 12);
-  display.print("CPU");
-  display.setCursor(96, 12);
-  display.print("MEM");
-
-  if (!m.hasApp) {
-    display.setCursor(0, 32);
-    display.print("no heavy app now");
-    display.setCursor(0, 54);
-    display.print(WiFi.localIP().toString().c_str());
-    display.display();
-    return;
-  }
-
-  for (int i = 0; i < m.appN && i < 5; i++) {
-    if (m.appName[i][0] == 0) break;
-    int y = 22 + i * 8;
-    display.setCursor(0, y);
-    display.print(m.appName[i]);
-    numRight(92, y, m.appCpu[i], "%", 1);    // 一位小数，0.x% 也看得见（任务管理器同款）
-    numRight(127, y, m.appMem[i], "M");
-  }
-  display.display();
-}
-
-// ---------------- 页面 3：NET 速率曲线 ----------------
+// ---------------- 页面 2：NET 速率曲线 ----------------
 void drawNet() {
   if (!oledOk) return;
   bool live = m.valid && (millis() - lastPacketMs < 3000);
@@ -540,7 +467,7 @@ void updateButtons() {
   btn2.pin = PAGE_BTN2_PIN;
   uint8_t e = btnUpdate(btn1);
   if (e == 1) {
-    curPage = (curPage + 1) % 4;
+    curPage = (curPage + 1) % 3;
     lastDrawMs = 0;
     Serial.printf("[ui] page %u\n", curPage);
   } else if (e == 2) {
@@ -552,7 +479,7 @@ void updateButtons() {
 
   e = btnUpdate(btn2);
   if (e == 1) {
-    curPage = (curPage + 3) % 4;
+    curPage = (curPage + 2) % 3;
     lastDrawMs = 0;
     Serial.printf("[ui] page %u\n", curPage);
   } else if (e == 2 && oledOk) {
@@ -751,14 +678,11 @@ void loop() {
   unsigned long now = millis();
   updateButtons();
   sampleHistory();
-  if (screenOn && now - lastDrawMs >= 250) {   // 4 帧/秒。8266 上 I2C 全量刷 1KB 约 25ms，别调太快
+  if (screenOn && now - lastDrawMs >= 500) {   // 2 帧/秒：全量刷 1KB 约 25ms，太快会有肉眼可见的闪动
     lastDrawMs = now;
-    switch (curPage) {
-      case 0:  drawMain();   break;
-      case 1:  drawDetail(); break;
-      case 2:  drawTop();    break;
-      default: drawNet();    break;
-    }
+    if (curPage == 0) drawMain();
+    else if (curPage == 1) drawDetail();
+    else drawNet();
   }
 
   updateLed();

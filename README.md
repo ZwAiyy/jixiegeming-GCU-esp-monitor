@@ -27,8 +27,8 @@ ESP32-C3/
   GCU_OLED/         ESP32-C3 SuperMini 固件（Arduino）
   使用说明.txt       接线 / 烧录 / 排障（写得比较全，推荐先看）
 ESP8266/
-  GCU_OLED_8266/    ESP8266 固件（Arduino），比 C3 版多三样：
-                    外接按键翻页（详情页 + Top5 应用页）、
+  GCU_OLED_8266/    ESP8266 固件（Arduino），比 C3 版多几样：
+                    外接双键翻页 + 长按功能（重认证/熄屏）、NET 速率曲线页、
                     校园网 Portal 自动认证、WiFi 信号/堆内存显示
   烧录.bat           esptool 命令行一键烧录
   串口下载说明.txt   裸模块串口下载注意事项
@@ -115,8 +115,7 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 **ESP8266 版四个页面，两个按键导航**：
 - 页面 0 主页：CPU / GPU / MEM 条形图 + 温度，FAN 双风扇转速，SSD 温度 + 网速缩写
 - 页面 1 详情：内存 已用/总量、上下行网速完整值、SSD 温度、电池、WiFi 信号强度（dBm）、剩余堆内存
-- 页面 2 **TOP PROC**：资源占用最高的前 5 个**进程**（名称 + CPU% + 内存 MB），任务管理器"进程"页同口径（CPU 按 TotalProcessorTime 差值 ÷ 逻辑核数，内存按工作集）。电脑端每 2 秒采样一次；CPU≈0 且内存 <50MB 的后台进程不上榜，无上榜进程时显示 "no heavy app now"
-- 页面 3 **NET 曲线**：下行速率实时走势图（最近 4 分 16 秒，量程自动缩放）+ 当前值 + 峰值
+- 页面 2 **NET 曲线**：下行速率实时走势图（最近 4 分 16 秒，量程自动缩放）+ 当前值 + 峰值
 
 按键（一端接引脚、一端接 GND，无需电阻）：
 
@@ -160,8 +159,5 @@ GCU1|cpu=19|ct=62|gpu=10|gt=52|mem=54|mt=15.7|mu=8.5|f1=2722|f2=2650|ssd=47|dn=3
 | f1 / f2 | CPU / GPU 风扇 RPM | ssd | SSD 温度 ℃ |
 | dn / up | 下载 / 上传速率 | bat | 电池 % |
 | fe | 风扇错误码 | age | 数据年龄（秒，-1 = 无数据） |
-
-应用占用 Top5（ESP8266 版第 3 页）：`ac` = 行数（0~5，先于其它键发送，用于清除旧行），
-`a1..a5` = 进程名（≤10 字符），`c1..c5` = CPU%，`g1..g5` = 内存占用（MB）。
 
 缺数据的 key 整个不发，接收端保留上一次的值。
