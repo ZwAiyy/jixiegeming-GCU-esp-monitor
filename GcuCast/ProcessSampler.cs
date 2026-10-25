@@ -36,7 +36,7 @@ internal static class ProcessSampler
             {
                 try { Sample(); }
                 catch { /* 采样失败不影响转发主流程 */ }
-                Thread.Sleep(2000);
+                Thread.Sleep(1000);   // 任务管理器同款 1 秒刷新，抓得住瞬时尖峰
             }
         })
         { IsBackground = true, Name = "ProcessSampler" };

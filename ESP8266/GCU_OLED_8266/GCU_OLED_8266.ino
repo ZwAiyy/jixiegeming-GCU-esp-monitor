@@ -453,7 +453,7 @@ void drawTop() {
     int y = 22 + i * 8;
     display.setCursor(0, y);
     display.print(m.appName[i]);
-    numRight(90, y, m.appCpu[i], "%");
+    numRight(92, y, m.appCpu[i], "%", 1);    // 一位小数，0.x% 也看得见（任务管理器同款）
     numRight(127, y, m.appMem[i], "M");
   }
   display.display();
