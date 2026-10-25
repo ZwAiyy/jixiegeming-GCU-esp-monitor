@@ -39,7 +39,7 @@ ESP8266/
 - ESP32-C3 SuperMini **或** ESP8266（NodeMCU / Wemos D1 mini / ESP-12F；ESP-01 也能跑，用 1MB 布局）
 - 0.96 寸 128x64 I2C OLED（SSD1306，4 针，地址一般 0x3C）
 - 杜邦线 4 根
-- ESP8266 方案再备一个轻触开关（翻页用，一端接 D5、一端接 GND）
+- ESP8266 方案再备两个轻触开关（翻页 / 长按功能，一端接引脚、一端接 GND）
 
 ### 接线
 
@@ -112,10 +112,18 @@ dotnet publish -c Release -r win-x64 --self-contained false -p:PublishSingleFile
 
 ## 屏幕显示
 
-**ESP8266 版按 D5 按键循环三个页面**：
+**ESP8266 版四个页面，两个按键导航**：
 - 页面 0 主页：CPU / GPU / MEM 条形图 + 温度，FAN 双风扇转速，SSD 温度 + 网速缩写
 - 页面 1 详情：内存 已用/总量、上下行网速完整值、SSD 温度、电池、WiFi 信号强度（dBm）、剩余堆内存
 - 页面 2 **TOP APPS**：CPU/GPU 占用最高的前 5 个应用（名称 + CPU% + GPU%），电脑端每 2 秒采样一次。GPU 按进程聚合用的是 Windows "GPU Engine" 性能计数器（任务管理器同款数据源）；没有重负载应用时显示 "no heavy app now"
+- 页面 3 **NET 曲线**：下行速率实时走势图（最近 4 分 16 秒，量程自动缩放）+ 当前值 + 峰值
+
+按键（一端接引脚、一端接 GND，无需电阻）：
+
+| 按键 | 引脚 | 短按 | 长按 1.5 秒 |
+|---|---|---|---|
+| 按键 1 | D5 (GPIO14) | 下一页 | 立即 Portal 重认证（掉线救急） |
+| 按键 2 | D6 (GPIO12) | 上一页 | 熄屏 / 亮屏 |
 
 右上角 `■LIVE` 收包正常 / `□LATE` 超过 3 秒没包 / `NO SIG` 从没收到。
 

@@ -29,22 +29,22 @@
 
 // ==================== 需要你修改的地方 ====================
 // 注意：ESP8266 只支持 2.4G 频段，5G 的 WiFi 连不上
-static const char *WIFI_SSID = "YourWiFi";
-static const char *WIFI_PASS = "YourPassword";   // 开放网络就留空 ""
+static const char *WIFI_SSID = "NUN";
+static const char *WIFI_PASS = "";   // 开放网络，无密码
 
-// ---------------- 校园网 Portal 认证（可选） ----------------
-// 有些校园网 / 公司网要 Portal 认证后才解除设备隔离，且认证跟着设备走：
-// 板子连上 WiFi 后会自己 POST 一次登录请求，之后每 10 分钟续签。
-// 不需要这个功能就把 PORTAL_URL 改成 ""（两个引号中间什么都不写）。
-static const char *PORTAL_URL = "";   // 例如 "http://172.16.0.1/api/account/login"
-static const char *PORTAL_BODY = "";  // 例如 "username=学号&password=密码&nasId=2&isp=local&timeLimit="
+// ---------------- 校园网 Portal 认证 ----------------
+// NUN 是认证后才解除设备隔离的，且认证跟着设备走（手机认证了不代表板子认证了），
+// 所以板子连上 WiFi 后要自己发一次登录请求，之后定时续签防止会话过期。
+static const char *PORTAL_URL = "http://172.16.230.50/api/account/login";
+static const char *PORTAL_BODY =
+    "username=20267620&password=xzsywsbczyy8&nasId=2&isp=local&timeLimit=";
 static const unsigned long PORTAL_REAUTH_MS = 10UL * 60 * 1000;  // 10 分钟续一次
 
 // ---------------- IP 心跳信令（可选） ----------------
-// 内网 Linux 服务器跑 signaling/heartbeat_server.py 后，把地址填到这里；
+// 内网服务器跑 heartbeat_server.py 后，把地址填到这里；
 // 板子每 30 秒上报一次，电脑端 GcuCast 自动取到板子 IP，换 IP 免改配置。
-// 留空 "" 关闭该功能。口令要与服务器端 TOKEN 一致。
-static const char *SIGNAL_URL = "";   // 例如 "http://172.16.0.100:8300/heartbeat"
+// 留空 "" 关闭该功能。
+static const char *SIGNAL_URL = "http://172.16.50.83:8300/heartbeat";
 static const char *SIGNAL_TOKEN = "gcu-hud-2026";
 static const unsigned long SIGNAL_PERIOD_MS = 30UL * 1000;
 
@@ -63,13 +63,28 @@ static const uint8_t SCREEN_ROTATION = 0;
 static const int STATUS_LED_PIN = 2;
 static const bool STATUS_LED_ACTIVE_LOW = true;
 
-// 翻页按键（外接轻触开关）：一端接这个引脚、另一端接 GND，内部上拉，按下为低电平。
-// 默认 D5 (GPIO14)，也可换 D6(GPIO12) / D7(GPIO13)。-1 关闭该功能
-static const int PAGE_BTN_PIN = 14;
+// 两个翻页按键（外接轻触开关）：一端接引脚、另一端接 GND，内部上拉，按下为低电平。
+//   按键1 D5 (GPIO14)：短按 = 下一页；长按 1.5 秒 = 立即 Portal 重认证
+//   按键2 D6 (GPIO12)：短按 = 上一页；长按 1.5 秒 = 熄屏 / 亮屏
+// 都可换 D7(GPIO13)，填 -1 关闭对应按键
+static const int PAGE_BTN_PIN  = 14;   // 按键1（下一页 / 长按重认证）
+static const int PAGE_BTN2_PIN = 12;   // 按键2（上一页 / 长按熄屏）
 // ========================================================
 
 Adafruit_SSD1306 display(128, 64, &Wire, -1);
 WiFiUDP udp;
+
+// struct 要定义在任何函数之前：Arduino 编译前会自动在文件开头生成函数原型，
+// 若 struct 定义在后面，原型里的类型名会找不到（编译报 'Btn' was not declared）
+struct Btn {
+  int pin;
+  bool raw, deb;
+  unsigned long tChange, tDown;
+  bool longFired;
+};
+
+Btn btn1;   // setup 里再赋值（PAGE_BTN_PIN 等常量在前面）
+Btn btn2;
 
 // OLED 是否初始化成功。失败时绝不能调 display 的绘图 API
 // （内部 buffer 未分配，clearDisplay 会踩空指针 → 板子反复重启）
@@ -84,6 +99,7 @@ struct Metrics {
   float bat, fe;
   char dn[16];
   char up[16];
+  float dnK, upK;                 // 网速数值（Kbps），NET 页画曲线用
   bool valid;
   // 应用占用 Top5（页面 2）
   int appN;                       // 有效行数 0..5
@@ -101,11 +117,30 @@ unsigned long lastPortalMs = 0;
 unsigned long lastSignalMs = 0;
 bool ledOn = false;
 bool wasWifiOk = false;
-uint8_t curPage = 0;   // 0 = 主页面，1 = DETAIL 详情页
+bool screenOn = true;
+uint8_t curPage = 0;   // 0 主页 / 1 详情 / 2 Top5 / 3 NET 曲线
+
+// ---------------- 下行速率历史（NET 页曲线） ----------------
+// 每 4 秒采一个点，64 个点 = 最近 4 分 16 秒；量程自动缩放到本次峰值
+static const uint8_t HIST_N = 64;
+static const unsigned long HIST_PERIOD_MS = 4000;
+uint8_t dnHist[HIST_N];
+unsigned long lastHistMs = 0;
+float histPeakK = 0;            // 开机以来下行峰值（Kbps）
+
+void sampleHistory() {
+  unsigned long now = millis();
+  if (now - lastHistMs < HIST_PERIOD_MS) return;
+  lastHistMs = now;
+  float v = isnan(m.dnK) ? 0.0f : (m.dnK > 0 ? m.dnK : 0.0f);
+  if (v > histPeakK) histPeakK = v;
+  float scale = histPeakK > 50.0f ? histPeakK : 50.0f;   // 最低量程 50K，避免全零时除小数
+  memmove(dnHist, dnHist + 1, HIST_N - 1);
+  dnHist[HIST_N - 1] = (uint8_t)constrain(v * 255.0f / scale, 0.0f, 255.0f);
+}
 
 // ---------------- 校园网 Portal 认证 ----------------
 bool portalLogin() {
-  if (PORTAL_URL[0] == '\0') return true;   // 没配 Portal 就直接当成功
   WiFiClient wc;
   HTTPClient http;
   if (!http.begin(wc, PORTAL_URL)) {
@@ -161,6 +196,7 @@ void resetMetrics() {
   m.bat = m.fe = NAN;
   strcpy(m.dn, "--");
   strcpy(m.up, "--");
+  m.dnK = m.upK = NAN;
   m.valid = false;
   m.appN = 0;
   m.hasApp = false;
@@ -186,6 +222,15 @@ static String shortRate(const char *s) {
   return t;
 }
 
+// "856 Kbps" → 856.0；"1.23 Mbps" → 1230.0；无效 → NAN（单位 Kbps）
+static float parseRateK(const char *s) {
+  String t(s);
+  if (t == "--" || t.length() == 0) return NAN;
+  bool mb = t.indexOf("Mbps") >= 0 || t.indexOf("MB/s") >= 0;
+  float f = t.toFloat();
+  return mb ? f * 1000.0f : f;
+}
+
 // ---------------- 解析 "GCU1|cpu=..|ct=.." ----------------
 void parsePacket(char *buf) {
   if (strncmp(buf, "GCU1", 4) != 0) return;
@@ -209,8 +254,8 @@ void parsePacket(char *buf) {
       else if (!strcmp(k, "ssd")) m.ssd = toF(v);
       else if (!strcmp(k, "bat")) m.bat = toF(v);
       else if (!strcmp(k, "fe"))  m.fe  = toF(v);
-      else if (!strcmp(k, "dn"))  { strncpy(m.dn, v, sizeof(m.dn) - 1); m.dn[sizeof(m.dn) - 1] = 0; }
-      else if (!strcmp(k, "up"))  { strncpy(m.up, v, sizeof(m.up) - 1); m.up[sizeof(m.up) - 1] = 0; }
+      else if (!strcmp(k, "dn"))  { strncpy(m.dn, v, sizeof(m.dn) - 1); m.dn[sizeof(m.dn) - 1] = 0; m.dnK = parseRateK(v); }
+      else if (!strcmp(k, "up"))  { strncpy(m.up, v, sizeof(m.up) - 1); m.up[sizeof(m.up) - 1] = 0; m.upK = parseRateK(v); }
       // 应用占用 Top5：ac=行数（先于 a/c/g 发，用于清旧行）
       else if (!strcmp(k, "ac")) {
         int n = (int)constrain(toF(v), 0.0f, 5.0f);
@@ -414,25 +459,107 @@ void drawTop() {
   display.display();
 }
 
-// ---------------- 翻页按键 ----------------
-void updatePageButton() {
-  if (PAGE_BTN_PIN < 0) return;
-  static bool lastRaw = false;
-  static bool debounced = false;
-  static unsigned long tChange = 0;
-  bool raw = (digitalRead(PAGE_BTN_PIN) == LOW);
-  unsigned long now = millis();
-  if (raw != lastRaw) {
-    lastRaw = raw;
-    tChange = now;
+// ---------------- 页面 3：NET 速率曲线 ----------------
+void drawNet() {
+  if (!oledOk) return;
+  bool live = m.valid && (millis() - lastPacketMs < 3000);
+
+  display.clearDisplay();
+  display.setTextSize(1);
+  display.setTextColor(SSD1306_WHITE);
+
+  display.setCursor(0, 0);
+  display.print("NET");
+  if (live) {
+    display.fillRect(94, 1, 5, 5, SSD1306_WHITE);
+    display.setCursor(102, 0);
+    display.print("LIVE");
+  } else if (m.valid) {
+    display.drawRect(94, 1, 5, 5, SSD1306_WHITE);
+    display.setCursor(102, 0);
+    display.print("LATE");
+  } else {
+    display.setCursor(90, 0);
+    display.print("NO SIG");
   }
-  if (raw != debounced && now - tChange > 50) {   // 50ms 消抖
-    debounced = raw;
-    if (debounced) {          // 按下的那一刻翻页（0 主页 / 1 详情 / 2 Top5 应用）
-      curPage = (curPage + 1) % 3;
-      lastDrawMs = 0;         // 让主循环立刻重绘
-      Serial.printf("[ui] page %u\n", curPage);
+  display.drawFastHLine(0, 9, 128, SSD1306_WHITE);
+
+  // 曲线区：y 14..48，64 个点连成折线
+  const int gy = 14, gh = 34;
+  for (int i = 1; i < HIST_N; i++) {
+    int x0 = (i - 1) * 127 / (HIST_N - 1);
+    int x1 = i * 127 / (HIST_N - 1);
+    int y0 = gy + gh - 1 - (int)((uint32_t)dnHist[i - 1] * (gh - 2) / 255);
+    int y1 = gy + gh - 1 - (int)((uint32_t)dnHist[i] * (gh - 2) / 255);
+    display.drawLine(x0, y0, x1, y1, SSD1306_WHITE);
+  }
+  display.drawFastHLine(0, gy + gh, 128, SSD1306_WHITE);   // 底线
+
+  // 底行：当前下行速率（左） + 本次峰值（右）
+  display.setCursor(0, 52);
+  display.print("DN ");
+  display.print(m.dn);
+  char b[16];
+  if (histPeakK > 0) snprintf(b, sizeof(b), "pk %.1fM", histPeakK / 1000.0f);
+  else               snprintf(b, sizeof(b), "pk --");
+  int16_t x1b, y1b; uint16_t wb, hb;
+  display.getTextBounds(b, 0, 52, &x1b, &y1b, &wb, &hb);
+  display.setCursor(127 - (int)wb, 52);
+  display.print(b);
+
+  display.display();
+}
+
+// ---------------- 按键（两键 + 长按） ----------------
+// 按键1 D5：短按下一页；长按 1.5s = Portal 立即重认证（掉线救急）
+// 按键2 D6：短按上一页；长按 1.5s = 熄屏 / 亮屏
+// 返回：0 无事件，1 短按（松开时触发），2 长按（按住 1.5s 触发一次）
+uint8_t btnUpdate(Btn &b) {
+  if (b.pin < 0) return 0;
+  bool raw = (digitalRead(b.pin) == LOW);
+  unsigned long now = millis();
+  if (raw != b.raw) { b.raw = raw; b.tChange = now; }
+  if (raw != b.deb && now - b.tChange > 50) {   // 50ms 消抖
+    b.deb = raw;
+    if (raw) {
+      b.tDown = now;
+      b.longFired = false;
+    } else if (!b.longFired) {
+      return 1;                                  // 短按：松开时触发
     }
+  }
+  if (b.deb && !b.longFired && now - b.tDown > 1500) {
+    b.longFired = true;                          // 长按：按住不放立即触发
+    return 2;
+  }
+  return 0;
+}
+
+void updateButtons() {
+  btn1.pin = PAGE_BTN_PIN;
+  btn2.pin = PAGE_BTN2_PIN;
+  uint8_t e = btnUpdate(btn1);
+  if (e == 1) {
+    curPage = (curPage + 1) % 4;
+    lastDrawMs = 0;
+    Serial.printf("[ui] page %u\n", curPage);
+  } else if (e == 2) {
+    Serial.println("[ui] portal re-auth");
+    splash("Portal re-auth...", "please wait");
+    portalLogin();
+    lastDrawMs = 0;
+  }
+
+  e = btnUpdate(btn2);
+  if (e == 1) {
+    curPage = (curPage + 3) % 4;
+    lastDrawMs = 0;
+    Serial.printf("[ui] page %u\n", curPage);
+  } else if (e == 2 && oledOk) {
+    screenOn = !screenOn;
+    if (screenOn) { display.ssd1306_command(SSD1306_DISPLAYON); lastDrawMs = 0; }
+    else            display.ssd1306_command(SSD1306_DISPLAYOFF);
+    Serial.printf("[ui] screen %s\n", screenOn ? "on" : "off");
   }
 }
 
@@ -555,7 +682,8 @@ void setup() {
     digitalWrite(STATUS_LED_PIN, STATUS_LED_ACTIVE_LOW ? HIGH : LOW);
   }
 
-  if (PAGE_BTN_PIN >= 0) pinMode(PAGE_BTN_PIN, INPUT_PULLUP);
+  if (PAGE_BTN_PIN >= 0)  pinMode(PAGE_BTN_PIN, INPUT_PULLUP);
+  if (PAGE_BTN2_PIN >= 0) pinMode(PAGE_BTN2_PIN, INPUT_PULLUP);
 
   // 先按指定引脚初始化 I2C，再交给 SSD1306
   Wire.begin(PIN_SDA, PIN_SCL);
@@ -589,12 +717,10 @@ void setup() {
   if (WiFi.status() == WL_CONNECTED) {
     String ip = WiFi.localIP().toString();
     Serial.println("[wifi] ok " + ip);
-    if (PORTAL_URL[0] != '\0') {
-      splash("Portal auth...", "please wait");
-      delay(600);
-      portalLogin();                 // 连上就先认证一次，解除设备隔离
-      lastPortalMs = millis();
-    }
+    splash("Portal auth...", "please wait");
+    delay(600);
+    portalLogin();                 // 连上就先认证一次，解除设备隔离
+    lastPortalMs = millis();
     wasWifiOk = true;
     splash("WiFi OK", ip.c_str());
     delay(1200);
@@ -623,12 +749,16 @@ void loop() {
   }
 
   unsigned long now = millis();
-  updatePageButton();
-  if (now - lastDrawMs >= 250) {   // 4 帧/秒。8266 上 I2C 全量刷 1KB 约 25ms，别调太快
+  updateButtons();
+  sampleHistory();
+  if (screenOn && now - lastDrawMs >= 250) {   // 4 帧/秒。8266 上 I2C 全量刷 1KB 约 25ms，别调太快
     lastDrawMs = now;
-    if (curPage == 0) drawMain();
-    else if (curPage == 1) drawDetail();
-    else drawTop();
+    switch (curPage) {
+      case 0:  drawMain();   break;
+      case 1:  drawDetail(); break;
+      case 2:  drawTop();    break;
+      default: drawNet();    break;
+    }
   }
 
   updateLed();
